@@ -1,0 +1,94 @@
+#!/usr/bin/env python
+
+import glob
+import os
+import os.path
+import pystache
+import subprocess
+
+def parse_service_spec(spec):
+    """ Parse definition of service mapping from format in dns-services.txt.
+    """
+    parts = spec.split("|")
+    if len(parts) != 2:
+        raise ValueError("spec {} is not of the form service|port".format(spec))
+    service, port = spec.split("|")
+    return service, port
+
+def create_conf(renderer, template, conf_dir, service, port):
+    env = {"service": service,
+            "port": port}
+    with open(os.path.join(conf_dir, env["service"] + ".conf"), "w") as f:
+        f.write(renderer.render(template, env))
+
+def iterate_specs(service_fname):
+    with open(service_fname) as f:
+        for line in f.readlines():
+            service, port = parse_service_spec(line.strip())
+            yield service, port
+
+def refresh_confs(service_fname, conf_dir):
+    # clear conf files in conf_dir
+    files = glob.glob(os.path.join(conf_dir, "*.conf"))
+    for fname in files:
+        os.remove(fname)
+
+    renderer = pystache.Renderer()
+    template = renderer.load_template(os.path.join(conf_dir, "service.conf"))
+    for service, port in iterate_specs(service_fname):
+        create_conf(renderer, template, conf_dir, service, port)
+
+def reload_nginx_conf():
+    cmd = ["sudo", "/usr/local/bin/nginx",
+        "-s", "reload",
+        "-c", "/usr/local/etc/nginx/dns_proxy.conf"]
+    subprocess.call(cmd)
+
+def add_command(args):
+    line = "%s|%d\n" % (args.service, args.port)
+    with open(args.file, "a") as f:
+        f.write(line)
+    refresh_confs(args.file, args.conf_dir)
+    reload_nginx_conf()
+
+def reload_command(args):
+    refresh_confs(args.file, args.conf_dir)
+    reload_nginx_conf()
+
+def list_command(args):
+    for service, port in iterate_specs(args.file):
+        domain = service + ".p"
+        print "{: >13} -> :{}".format(domain, port)
+
+import argparse 
+
+parser = argparse.ArgumentParser(
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+parser.add_argument("--file",
+        default="/usr/local/etc/nginx/dns-services.txt",
+        help="file to use for DNS services list")
+parser.add_argument("--conf-dir", dest="conf_dir",
+        default="/usr/local/etc/nginx/dns-ports",
+        help="directory to store port configurations in")
+subparsers = parser.add_subparsers()
+
+parser_add = subparsers.add_parser("add",
+        help="add a new DNS-port mapping")
+parser_add.set_defaults(func=add_command)
+parser_add.add_argument("service",
+        help="the desired DNS name of the service")
+parser_add.add_argument("port",
+        type=int,
+        help="the port number the service runs on")
+
+parser_reload = subparsers.add_parser("reload",
+        help="refresh the configurations from the service list")
+parser_reload.set_defaults(func=reload_command)
+
+parser_list = subparsers.add_parser("list",
+        help="list the current services")
+parser_list.set_defaults(func=list_command)
+
+args = parser.parse_args()
+# executes appropriate function based on subcommand
+args.func(args)
