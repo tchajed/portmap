@@ -2,6 +2,7 @@ server {
 	server_name  {{service}}.p;
 	location / {
 		proxy_pass http://localhost:{{port}};
+		proxy_read_timeout 180;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
 	}
